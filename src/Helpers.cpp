@@ -2,7 +2,6 @@
 #define Helpers_cpp_
 
 #include <Arduino.h>
-#include <Wire.h>
 #include <Helpers.h>
 #include <spiffs_api.h>
 #include <ESP8266HTTPClient.h>
@@ -14,7 +13,10 @@
 
 void Helpers::Sleep()
 {
-  SerialPrintln("Going to sleep...");
+  long s = TimeToSleepInSeconds * 1000;
+  SerialPrintf("Going to sleep for %d seconds...\n",s);
+  delay(s);
+  
   // esp_sleep_enable_timer_wakeup(TimeToSleepInSeconds * uS_TO_S_FACTOR);
   // esp_deep_sleep_start();
 }

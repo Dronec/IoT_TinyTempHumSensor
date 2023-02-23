@@ -28,6 +28,9 @@
 //
 #include <Helpers.h>
 
+// Sensors
+#include <DHT_U.h>
+
 // When developing for your own Arduino-based platform,
 // please follow the format '(ard;<platform>)'.
 #define AZURE_SDK_CLIENT_USER_AGENT "c%2F" AZ_SDK_VERSION_STRING "(ard;esp8266)"
@@ -53,13 +56,24 @@ static char base64_decoded_device_key[32];
 static char telemetry_topic[128];
 // static uint32_t telemetry_send_count = 0;
 
-const char *messageData = "{\"DeviceId\":\"%s\", \"Temperature\":%f, \"Pressure\":%f, \"Humidity\":%f, \"Version\":%s}";
+const char *messageData = "{\"DeviceId\":\"%s\", \"Temperature\":%f, \"Humidity\":%f, \"Version\":\"" FW_VERSION "\"}";
 
 // Translate iot_configs.h defines into variables used by the sample
 static const char *host = IOTHOST;
 static const char *device_id = IOTID;
 static const char *device_key = IOTKEY;
 static const int port = 8883;
+
+// Sensor configuration
+#define DHTPIN 2
+#define DHTTYPE DHT11 // DHT 11
+// #define DHTTYPE           DHT22     // DHT 22 (AM2302)
+// #define DHTTYPE           DHT21     // DHT 21 (AM2301)
+
+// See guide for details on sensor wiring and usage:
+//   https://learn.adafruit.com/dht/overview
+
+DHT_Unified dht(DHTPIN, DHTTYPE);
 
 static void connectToWiFi()
 {
@@ -130,7 +144,7 @@ static void initializeClients()
     Helpers::SerialPrintln("Failed initializing Azure IoT Hub client");
     return;
   }
-
+  Helpers::SerialPrintf("IoT server set for %s, %d\n", host, port);
   mqtt_client.setServer(host, port);
   mqtt_client.setCallback(receivedCallback);
 }
@@ -217,7 +231,7 @@ static int connectToAzureIoTHub()
   if (az_result_failed(az_iot_hub_client_get_user_name(
           &client, mqtt_username, sizeofarray(mqtt_username), NULL)))
   {
-    printf("Failed to get MQTT clientId, return code\n");
+    Helpers::SerialPrintln("Failed to get MQTT clientId, return code\n");
     return 1;
   }
 
@@ -280,7 +294,7 @@ static void establishConnection()
 static void sendTelemetry()
 {
   digitalWrite(LED_PIN, HIGH);
-  Serial.print(millis());
+  Serial.println(millis());
   Helpers::SerialPrintln(" ESP8266 Sending telemetry . . . ");
   if (az_result_failed(az_iot_hub_client_telemetry_get_publish_topic(
           &client, NULL, telemetry_topic, sizeof(telemetry_topic), NULL)))
@@ -289,14 +303,39 @@ static void sendTelemetry()
     return;
   }
 
-  // sensors.requestTemperatures();
-  // temperature = (sensors.getTempCByIndex(0));
-  // voltage = ESP.getVcc();
-  // char messagePayload[MESSAGE_MAX_LEN];
-  // snprintf(messagePayload, MESSAGE_MAX_LEN, messageData, device_id, temperature, voltage / 1000, FW_VERSION);
+  // Sensors
 
-  // mqtt_client.publish(telemetry_topic, messagePayload, false);
-  Helpers::SerialPrintln("OK");
+  Helpers::SerialPrintln("Init sensors... ");
+  //
+
+  float temperature = 0;
+  float humidity = 0;
+  dht.begin();
+
+  sensors_event_t event;
+  dht.temperature().getEvent(&event);
+  if (isnan(event.temperature))
+    Helpers::SerialPrintln("Error reading temperature!");
+  else
+    temperature = event.temperature;
+
+  // Get humidity event and print its value.
+  dht.humidity().getEvent(&event);
+  if (isnan(event.relative_humidity))
+    Helpers::SerialPrintln("Error reading humidity!");
+  else
+    humidity = event.relative_humidity;
+  //
+
+  char messagePayload[MESSAGE_MAX_LEN];
+  snprintf(messagePayload, MESSAGE_MAX_LEN, messageData, device_id, temperature, humidity);
+  Helpers::SerialPrintln(messagePayload);
+
+#ifndef debugon
+  mqtt_client.publish(telemetry_topic, messagePayload, false);
+  Helpers::SerialPrintln("Payload sent.");
+#endif
+
   delay(100);
   digitalWrite(LED_PIN, LOW);
 }
@@ -312,13 +351,11 @@ void setup()
   SPIFFS.setConfig(cfg);
   if (SPIFFS.begin())
     Serial.println("SPIFFS mounted successfully");
-  ///
-  
-  Helpers::SerialPrintln("Init sensors... ");
-  // sensors.begin();
+
+  establishConnection();
+
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);
-  establishConnection();
   // OTA update
   Helpers::SerialPrintf("Checking for updates on %s\n", OTA_GET_VERSION_ENDPOINT IOTID);
   OTAConfig config(
@@ -329,13 +366,13 @@ void setup()
       true);
   EasyOTA ota(config);
   ota.runUpdateRoutine(wificlient);
+
   Helpers::SerialPrintln("Sending telemetry...");
   sendTelemetry();
   mqtt_client.loop();
   Helpers::Blink(3, 1000, 500);
   Helpers::Uploadlog(wificlient);
-  Helpers::SerialPrintln("Going to sleep...");
-  delay(30000);
+  Helpers::Sleep();
   ESP.restart();
 }
 
